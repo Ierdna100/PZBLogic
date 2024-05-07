@@ -135,6 +135,9 @@ counters = {}
 bhr = 0
 
 -- 1000 Hz magnet
+-- Called when magnet is passed
+-- Value: Seconds since magnet triggered
+-- Rate: 1/60 of a second per tick (1 tick/tick)
 counters.acknowledge = {
     timeBased = true,
     start = function (self)
@@ -152,6 +155,9 @@ counters.acknowledge = {
     rate = 0,
     stopAt = 0
 }
+-- Called when 1000 Hz is acknowledged
+-- Value: Speed limit when acknowledged
+-- Rate: 0.97 m/s/s, 0.53 m/s/s, 0.36 m/s/s, acceleration to follow in order to safely reach the lower speed limit (85/70/55 km/h)
 counters.on1000 = {
     timeBased = true,
     start = function (self)
@@ -168,6 +174,9 @@ counters.on1000 = {
     done = true,
     onDone = {}
 }
+-- Called when 1000 Hz is acknowledged
+-- Value: 1250 meters until it allows release
+-- Rate: 1 meter/meter travelled
 counters.release1000 = {
     timeBased = false,
     start = function (self)
@@ -191,6 +200,10 @@ counters.release1000 = {
 }
 
 -- 500 Hz magnet
+-- Called when passing a 500 Hz magnet
+-- Value: 65, 50, 40 km/h, initial speed limit on magnet
+-- StopAt: Speed limit when having passed the 153 meters allowed
+-- Rate: rate in order to be able to reduce to final speed in 153 meters
 counters.on500 = {
     timeBased = false,
     start = function (self)
@@ -206,6 +219,9 @@ counters.on500 = {
     rate = 0,
     stopAt = 0
 }
+-- Called when passing a 500 Hz magnet
+-- Value: distance until 500 Hz can be released
+-- Rate: 1 meter/meter
 counters.release500 = {
     timeBased = false,
     start = function (self)
@@ -227,6 +243,9 @@ counters.release500 = {
     rate = 0,
     stopAt = 0
 }
+-- Called when travelling under 10 km/h or having fully stopped
+-- Value: 45 km/h
+-- Rate: rate in order to be able to reduce to final speed limit in 153 meters
 counters.restrictive500 = {
     timeBased = false,
     start = function (self)
@@ -242,6 +261,9 @@ counters.restrictive500 = {
 }
 
 -- Restrictive mode
+-- Value: 10 seconds
+-- Rate 1 tick/tick
+-- Determines when restrictive monitoring should come into effect
 counters.restrictiveCalculator = {
     timeBased = true,
     start = function (self)
@@ -269,6 +291,9 @@ counters.restrictiveCalculator = {
 }
 
 --- 2000 Hz magnet
+-- Called when CMD40 is active
+-- Value: 2000 meters
+-- Rate: 1 meter/meter
 counters.onB40 = {
     timeBased = false,
     start = function (self)
@@ -291,22 +316,26 @@ counters.onB40 = {
 
 -- Worst state machine known to human-kind
 function onTick()
+    -- initialization
     if (tick == 0) then
         setMode()
         state = states.unknown
     end
 
+    -- Blinker to blink stuff
     if (tick % blinkerFreq == 0) then
         blinker = not blinker
     end
 
     local inputs = getInputs()
 
+    -- Setting new mode and Braking Hundreths (BHR)
     if (inputs.setBhr and inputs.speed < 0.1 and inputs.reverser < 0.05 and inputs.reverser > -0.05) then
         bhr = inputs.newBhr
         setMode()
     end
 
+    -- Reverser math.
     local currReverser = 0
     if (inputs.reverser >= 0) then
         currReverser = validReverserPositions.F
@@ -314,14 +343,16 @@ function onTick()
         currReverser = validReverserPositions.R
     end
 
+    -- When passing over a 1000 Hz magnet
     if (inputs.magnet1000) then
         lastValidReverser = currReverser
         counters.acknowledge:start()
         state = states.awaitAck
     end
 
+    -- May not be needed, the function already sets the e-stop
     if (state == states.awaitAck) then
-        if (counters.acknowledge == 1) then
+        if (counters.acknowledge.value == 1) then
             state = states.eStop
         elseif (inputs.acknowledge) then
             counters.acknowledge.done = true
@@ -330,6 +361,7 @@ function onTick()
         end
     end
 
+    -- When passing over a 500 Hz magnet
     if (inputs.magnet500) then
         lastValidReverser = currReverser
         if (state == states.unrestricted or state == states.awaitAck) then
@@ -345,6 +377,7 @@ function onTick()
         end
     end
 
+    -- When passing over a 2000 Hz magnet
     if (inputs.magnet2000) then
         lastValidReverser = currReverser
         if (inputs.override and inputs.speed < 40 / 3.6) then
@@ -355,18 +388,21 @@ function onTick()
         end
     end
 
+    -- Restrictive mode calculator
     if (inputs.speed < 10 / 3.6 and (state == states.under1000Hz or state == states.under500Hz) and counters.restrictiveCalculator.done) then
         counters.restrictiveCalculator:start()
     elseif (not counters.restrictiveCalculator.done and inputs.speed > 10 / 3.6) then
         counters.restrictiveCalculator.done = true
     end
 
+    -- When stopped, we want to do the same as if the restrictive mode calculator ran out
     if (inputs.speed < 0.1 and (state == states.under1000Hz or state == states.under500Hz)) then
         for _, f in ipairs(counters.restrictiveCalculator.onDone) do
             f()
         end
     end
 
+    -- If awaiting release
     if (state == states.awaitRelFrom1000
     or state == states.awaitRelFrom500
     or state == states.awaitRelRestrictedFrom1000
@@ -376,6 +412,7 @@ function onTick()
         end
     end
 
+    -- If Emergency Brake is in effect
     if (state == states.eStop) then
         if (inputs.releaseEBrake and inputs.speed < 0.1) then
             counters.on1000:start()
@@ -383,7 +420,7 @@ function onTick()
         end
     end
 
-    -- counters doing counter things
+    -- Counters math
     for k, v in pairs(counters) do
         if (v.done) then
             goto continue
@@ -392,9 +429,11 @@ function onTick()
         if (v.timeBased) then
             v.value = v.value + v.rate
         else
+            -- Distance based counters, dependent on speed
             v.value = v.value + (v.rate * (inputs.speed / tickrate))
         end
 
+        -- onDone() equivalent
         if (v.value < v.stopAt) then
             v.value = v.stopAt
             v.rate = 0
@@ -406,14 +445,23 @@ function onTick()
         ::continue::
     end
 
+    -- If going over the speed limit
     if (inputs.speed * 3.6 > speedLimit + 5) then
         state = states.eStop
     end
 
+    -- If changing reverser state
     if (currReverser ~= lastValidReverser) then
         state = states.unknown
     end
 
+    -- This could possibly be turned into a dictionary.
+    --[[
+        Additional modes to add:
+        - When 500 and 1000 Hz lamps are lit together: PZB enacted E-brake
+        - When 1000 blinking alone: PZB disabled/Brake Pipe < 2.2 bar
+        - 
+    ]]
     if (state == states.awaitAck or state == states.unrestricted) then
         speedLimit = mode:getValueByMode(165, 125, 105)
         lights:setAllLights(true, false, false, false)
@@ -500,24 +548,24 @@ function out()
     output.setBool(5, lights.magnet1000)
     output.setBool(6, lights.command40)
     output.setBool(7, state == states.awaitAck) -- ack buzzer
+    output.setBool(8, eBrakes)
     output.setNumber(1, speedLimit)
 
-    output.setBool(32, eBrakes)
-    output.setBool(29, state == states.awaitRelRestricted or state == states.awaitRel)
-    output.setBool(28, blinker)
+    -- output.setBool(29, state == states.awaitRelRestricted or state == states.awaitRel)
+    -- output.setBool(28, blinker)
 
-    output.setNumber(32, mode.index)
-    output.setNumber(31, counters.acknowledge.value * tickrate)
-    output.setNumber(30, bhr)
+    -- output.setNumber(32, mode.index)
+    -- output.setNumber(31, counters.acknowledge.value * tickrate)
+    -- output.setNumber(30, bhr)
 
-    output.setNumber(29, counters.acknowledge.value)
-    output.setNumber(28, counters.on1000.value)
-    output.setNumber(27, counters.on500.value)
-    output.setNumber(26, counters.onB40.value)
-    output.setNumber(25, counters.release1000.value)
-    output.setNumber(24, counters.release500.value)
-    output.setNumber(23, counters.restrictive500.value)
-    output.setNumber(22, counters.restrictiveCalculator.value)
+    -- output.setNumber(29, counters.acknowledge.value)
+    -- output.setNumber(28, counters.on1000.value)
+    -- output.setNumber(27, counters.on500.value)
+    -- output.setNumber(26, counters.onB40.value)
+    -- output.setNumber(25, counters.release1000.value)
+    -- output.setNumber(24, counters.release500.value)
+    -- output.setNumber(23, counters.restrictive500.value)
+    -- output.setNumber(22, counters.restrictiveCalculator.value)
 end
 
 -- function onDraw()
