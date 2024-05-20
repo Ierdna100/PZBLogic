@@ -335,7 +335,7 @@ function onTick()
         setMode()
     end
 
-    -- Reverser math.
+    -- Reverser math
     local currReverser = 0
     if (inputs.reverser >= 0) then
         currReverser = validReverserPositions.F
@@ -350,7 +350,7 @@ function onTick()
         state = states.awaitAck
     end
 
-    -- May not be needed, the function already sets the e-stop
+    -- When 1000 Hz is acknowledged
     if (state == states.awaitAck and inputs.acknowledge) then
         counters.acknowledge.done = true
         counters.on1000:start()
@@ -360,9 +360,11 @@ function onTick()
     -- When passing over a 500 Hz magnet
     if (inputs.magnet500) then
         lastValidReverser = currReverser
+        -- You cannot pass a 500 Hz if you were in unrestricted mode, something went wrong or driver released wrongly
         if (state == states.unrestricted or state == states.awaitAck) then
             state = states.eStop
         else
+            -- Passing over restrictive mode from 1000 to 500 Hz
             if (state == states.under1000HzRestrictive) then
                 state = states.under500HzRestrictive
             else
@@ -376,6 +378,7 @@ function onTick()
     -- When passing over a 2000 Hz magnet
     if (inputs.magnet2000) then
         lastValidReverser = currReverser
+        -- Befehl 40 button has no effect over 40 km/h for safety reasons
         if (inputs.override and inputs.speed < 40 / 3.6) then
             state = states.underB40
             counters.onB40:start()
@@ -423,13 +426,14 @@ function onTick()
         end
 
         if (v.timeBased) then
+            -- Time based counters, dependent on time (rate is per tick)
             v.value = v.value + v.rate
         else
             -- Distance based counters, dependent on speed
             v.value = v.value + (v.rate * (inputs.speed / tickrate))
         end
 
-        -- onDone() equivalent
+        -- onDone() equivalent to avoid code repetition. Calls all methods in onDone
         if (v.value < v.stopAt) then
             v.value = v.stopAt
             v.rate = 0
@@ -535,6 +539,12 @@ function getInputs()
     }
 end
 
+-- Compute speed limit curve (in km/h/meters travelled) depending on the start and end speed and distance that should be travelled between those 2 speeds.
+function speedLimitCounterCurve(startSpeed, endSpeed, distance)
+    return -(startSpeed - endSpeed) / distance
+end
+
+
 function out()
     output.setBool(1, lights.mode55)
     output.setBool(2, lights.mode70)
@@ -621,7 +631,3 @@ end
 --         screen.drawText(0, (i + j - 1) * 6 + 1, v.key .. v.value)
 --     end
 -- end
-
-function speedLimitCounterCurve(startSpeed, endSpeed, distance)
-    return -(startSpeed - endSpeed) / distance
-end
