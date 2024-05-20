@@ -351,14 +351,10 @@ function onTick()
     end
 
     -- May not be needed, the function already sets the e-stop
-    if (state == states.awaitAck) then
-        if (counters.acknowledge.value == 1) then
-            state = states.eStop
-        elseif (inputs.acknowledge) then
-            counters.acknowledge.done = true
-            counters.on1000:start()
-            state = states.under1000Hz
-        end
+    if (state == states.awaitAck and inputs.acknowledge) then
+        counters.acknowledge.done = true
+        counters.on1000:start()
+        state = states.under1000Hz
     end
 
     -- When passing over a 500 Hz magnet
@@ -460,7 +456,6 @@ function onTick()
         Additional modes to add:
         - When 500 and 1000 Hz lamps are lit together: PZB enacted E-brake
         - When 1000 blinking alone: PZB disabled/Brake Pipe < 2.2 bar
-        - 
     ]]
     if (state == states.awaitAck or state == states.unrestricted) then
         speedLimit = mode:getValueByMode(165, 125, 105)
